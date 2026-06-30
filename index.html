@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>AI Skill IQ Prep Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="data/questions.js"></script>
+  <script defer src="data/concepts.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+  <div class="grid-bg"></div>
+
+  <header class="topbar">
+    <a href="#" class="brand" aria-label="Dashboard home" id="homeLink">
+      <span class="brand-mark">IQ</span>
+      <span><strong>AI Skill IQ Prep</strong><small>Dashboard • Learning • Exam • Sprint</small></span>
+    </a>
+    <nav class="topnav" aria-label="Primary">
+      <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+      <button class="nav-btn" data-view="setup">Practice Setup</button>
+      <button class="nav-btn" data-view="concepts">Concepts</button>
+      <button class="nav-btn" data-view="import">Import</button>
+      <button class="nav-btn" data-view="library">Library</button>
+    </nav>
+    <div class="top-actions">
+      <button id="mobileFilters" class="icon-btn hide-desktop" title="Open setup">Setup</button>
+      <button id="themeToggle" class="icon-btn" title="Toggle theme">Theme</button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <aside class="left-rail panel" id="setupRail">
+      <div class="rail-head">
+        <div>
+          <p class="eyebrow">Practice controls</p>
+          <h2>Target</h2>
+        </div>
+        <button id="closeRail" class="icon-btn hide-desktop" aria-label="Close setup">×</button>
+      </div>
+
+      <section class="control-section">
+        <h3>Mode</h3>
+        <div class="mode-grid" id="modeGrid">
+          <button class="mode-card selected" data-mode="learn"><b>Learning</b><span>Instant feedback after every answer</span></button>
+          <button class="mode-card" data-mode="exam"><b>Exam</b><span>Score and review at the end</span></button>
+          <button class="mode-card" data-mode="skill"><b>Skill IQ Sprint</b><span>20 questions • 12 minutes • mixed</span></button>
+          <button class="mode-card" data-mode="concept"><b>Concept Mode</b><span>Study cards before practice</span></button>
+        </div>
+      </section>
+
+      <section class="control-section" id="questionControls">
+        <div class="control-title">
+          <h3>Question banks</h3>
+          <span id="bankCount" class="mini-badge"></span>
+        </div>
+        <p class="field-hint">Start clean: select only the bank(s) you want, or press All for mixed practice.</p>
+        <div class="search-row">
+          <input id="bankSearch" type="search" placeholder="Search banks..." autocomplete="off" />
+          <button class="mini-btn" id="banksAll">All</button>
+          <button class="mini-btn" id="banksNone">None</button>
+        </div>
+        <div class="chip-list bank-list" id="bankList" aria-label="Question banks"></div>
+
+        <div class="control-title mt">
+          <h3>Topics</h3>
+          <span id="topicCount" class="mini-badge"></span>
+        </div>
+        <p class="field-hint">Optional: leave topics unselected to include every topic from the selected bank(s).</p>
+        <div class="search-row">
+          <input id="topicSearch" type="search" placeholder="Search topics..." autocomplete="off" />
+          <button class="mini-btn" id="topicsAll">All</button>
+          <button class="mini-btn" id="topicsNone">None</button>
+        </div>
+        <label class="toggle-line compact"><input id="selectedOnly" type="checkbox" /> Show selected only</label>
+        <div class="chip-list topic-list" id="topicList" aria-label="Topics"></div>
+
+        <div class="control-title mt"><h3>Difficulty</h3></div>
+        <div class="segmented" id="difficultyList"></div>
+
+        <div class="form-grid mt">
+          <label>Questions<input id="questionCount" type="number" min="1" max="120" value="25" /></label>
+          <label>Minutes<input id="examMinutes" type="number" min="1" max="120" value="12" /></label>
+        </div>
+        <label class="toggle-line"><input id="shuffleOptions" type="checkbox" checked /> Shuffle answer choices</label>
+        <button id="startBtn" class="primary full">Start session</button>
+      </section>
+
+      <section class="control-section hidden" id="conceptControls">
+        <h3>Concept category</h3>
+        <select id="conceptCategory"></select>
+        <button id="openConceptsBtn" class="primary full">Open concept deck</button>
+      </section>
+
+      <section class="progress-widget">
+        <div><span>Answered locally</span><b id="answeredLocal">0</b></div>
+        <div><span>Best exam</span><b id="bestScore">—</b></div>
+        <button id="resetProgress" class="text-danger">Reset progress</button>
+      </section>
+    </aside>
+
+    <section class="workspace">
+      <section id="dashboardView" class="view active">
+        <div class="hero panel">
+          <div class="hero-copy">
+            <p class="eyebrow">Offline Skill IQ practice simulator</p>
+            <h1>Master AI, ML, LLMs, Prompt Engineering, Agentic AI, Harness, and evaluation.</h1>
+            <p>Use targeted learning for weak topics, then switch to timed mixed practice. The updated bank includes harder Prompt Engineering scenario questions.</p>
+            <div class="hero-actions">
+              <button class="primary" id="heroStart">Start mixed sprint</button>
+              <button class="secondary" id="heroSetup">Customize practice</button>
+            </div>
+          </div>
+          <div class="hero-card">
+            <div class="ring"><span id="totalQuestionsHero">0</span><small>MCQs</small></div>
+            <div class="hero-stats">
+              <span><b id="bankTotalHero">0</b>Banks</span>
+              <span><b id="topicTotalHero">0</b>Topics</span>
+              <span><b id="conceptTotalHero">0</b>Cards</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="stat-grid" id="statGrid"></div>
+
+        <div class="dashboard-grid">
+          <article class="panel dashboard-card">
+            <div class="card-head"><h2>Recommended flow</h2><span class="mini-badge">Score focused</span></div>
+            <ol class="flow-list">
+              <li><b>Concept Mode</b><span>Review architecture, RAG, eval, agent concepts.</span></li>
+              <li><b>Learning Mode</b><span>Practice one weak topic with instant explanations.</span></li>
+              <li><b>Exam Mode</b><span>Take 30-question targeted exams.</span></li>
+              <li><b>Skill IQ Sprint</b><span>Finish with 20-question mixed timed sessions.</span></li>
+            </ol>
+          </article>
+          <article class="panel dashboard-card">
+            <div class="card-head"><h2>Coverage map</h2><span class="mini-badge" id="coverageBadge"></span></div>
+            <div class="coverage-list" id="coverageList"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="setupView" class="view">
+        <div class="panel section-title">
+          <p class="eyebrow">Setup</p>
+          <h1>Build a targeted or mixed practice session.</h1>
+          <p>Use the left controls to select banks, topics, difficulty, time, and session type. On small screens, tap Setup at the top.</p>
+        </div>
+        <div class="panel preview-panel" id="poolPreview"></div>
+      </section>
+
+      <section id="sessionView" class="view">
+        <div class="session-top panel">
+          <div>
+            <p class="eyebrow" id="sessionModeLabel">Learning Mode</p>
+            <h1 id="sessionTitle">Question Session</h1>
+          </div>
+          <div class="session-metrics">
+            <div><b id="timer">Practice</b><span>Time</span></div>
+            <div><b id="progressText">0/0</b><span>Progress</span></div>
+            <div><b id="liveScore">0%</b><span>Score</span></div>
+          </div>
+        </div>
+        <div class="progressbar"><div id="progressFill"></div></div>
+        <article class="question-card panel">
+          <div class="q-meta"><span id="qBank"></span><span id="qTopic"></span><span id="qDifficulty"></span></div>
+          <h2 id="questionText"></h2>
+          <div id="choices" class="choices"></div>
+          <div id="feedback" class="feedback hidden"></div>
+          <div class="action-row">
+            <button id="submitAnswer" class="primary">Submit answer</button>
+            <button id="nextQuestion" class="secondary hidden">Next question</button>
+            <button id="finishSession" class="secondary">Finish session</button>
+          </div>
+        </article>
+      </section>
+
+      <section id="resultsView" class="view">
+        <div id="resultsPanel" class="panel results"></div>
+      </section>
+
+      <section id="conceptsView" class="view">
+        <div id="conceptPanel" class="concept-panel"></div>
+      </section>
+
+
+      <section id="importView" class="view">
+        <div class="panel section-title">
+          <p class="eyebrow">Import questions</p>
+          <h1>Add your own questions from PDF, text, or JSON.</h1>
+          <p>Upload a selectable-text PDF, .txt/.md file, or JSON question bank. First parse to preview, then save to add them to the Practice Setup filters.</p>
+        </div>
+
+        <div class="import-grid">
+          <section class="panel import-card">
+            <div class="card-head"><h2>Upload source</h2><span class="mini-badge">PDF / TXT / JSON</span></div>
+            <label class="drop-zone" for="importFile">
+              <span class="drop-icon">＋</span>
+              <b>Choose a question file</b>
+              <small>Best PDF format: numbered questions with A/B/C/D options, Answer, and optional Explanation.</small>
+              <input id="importFile" type="file" accept=".pdf,.txt,.md,.json,application/pdf,application/json,text/plain,text/markdown" />
+            </label>
+            <div id="importFileName" class="file-name">No file selected.</div>
+
+            <div class="form-grid mt">
+              <label>Default bank<input id="importBank" type="text" value="Custom Imported Questions" /></label>
+              <label>Default topic<input id="importTopic" type="text" value="Imported Practice" /></label>
+            </div>
+            <label class="mt block-label">Default difficulty
+              <select id="importDifficulty">
+                <option>Medium</option>
+                <option selected>Hard</option>
+                <option>Very Hard</option>
+              </select>
+            </label>
+            <label class="toggle-line"><input id="replaceCustom" type="checkbox" /> Replace existing imported questions when saving</label>
+            <div class="action-row">
+              <button id="parseImportBtn" class="primary">Parse file</button>
+              <button id="saveImportedBtn" class="secondary" disabled>Save parsed questions to app</button>
+            </div>
+          </section>
+
+          <section class="panel import-card">
+            <div class="card-head"><h2>Import status</h2><span class="mini-badge" id="customCountBadge">0 custom</span></div>
+            <div id="importStatus" class="import-status">Upload a file and click Parse file.</div>
+            <div class="action-row">
+              <button id="exportCustomBtn" class="secondary">Export custom JSON</button>
+              <button id="exportCustomTxtBtn" class="secondary">Export custom TXT</button>
+              <button id="downloadTemplateBtn" class="secondary">Download TXT template</button>
+              <button id="clearCustomBtn" class="secondary danger-outline">Clear imported</button>
+            </div>
+            <div id="customLibrarySummary" class="custom-library-summary"></div>
+            <div class="import-help">
+              <h3>Recommended format</h3>
+<pre>1. What is the best prompt design for grounded RAG?
+A. Treat all retrieved text as instructions
+B. Separate instructions, user input, and context
+C. Ignore retrieved context
+D. Use no delimiters
+Answer: B
+Explanation: Retrieved content should be treated as data, not higher-priority instructions.
+Topic: RAG prompting
+Difficulty: Very Hard</pre>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel import-preview-panel">
+          <div class="card-head"><h2>Parsed preview</h2><span class="mini-badge" id="parsedCountBadge">0 parsed</span></div>
+          <div id="parsedPreview" class="parsed-preview empty">No parsed questions yet.</div>
+        </section>
+      </section>
+
+      <section id="libraryView" class="view">
+        <div class="panel section-title">
+          <p class="eyebrow">Reference library</p>
+          <h1>Included PDFs and data files</h1>
+          <p>These are packaged inside the ZIP for offline revision. The web app itself uses the JSON question bank.</p>
+        </div>
+        <div class="library-grid">
+          <a class="library-card panel" href="reference_pdfs/LLM_Skill_IQ_Advanced_Practice_Pack.pdf" target="_blank"><b>LLM Skill IQ Advanced Practice</b><span>Architecture, RAG, RLHF, eval, deployment</span></a>
+          <a class="library-card panel" href="reference_pdfs/ML_Basics_to_Advanced_Skill_IQ_Question_Bank.pdf" target="_blank"><b>ML Basics to Advanced</b><span>Metrics, algorithms, bias-variance, deployment</span></a>
+          <a class="library-card panel" href="reference_pdfs/Prompt_Engineering_Skill_IQ_Question_Bank.pdf" target="_blank"><b>Prompt Engineering</b><span>Prompt design and generative AI patterns</span></a>
+          <a class="library-card panel" href="reference_pdfs/AI_Fundamentals_Skill_IQ_Question_Bank.pdf" target="_blank"><b>AI Fundamentals</b><span>AI basics, governance, data, applications</span></a>
+          <a class="library-card panel" href="reference_pdfs/Agentic_AI_Concepts_Skill_IQ_Question_Bank.pdf" target="_blank"><b>Agentic AI Concepts</b><span>Agents, planning, memory, tools, safety</span></a>
+          <a class="library-card panel" href="reference_pdfs/AI_Agentic_Harness_ML_LLM_Eval_Pluralsight_Skill_IQ_Master_Prep.pdf" target="_blank"><b>Master Prep Guide</b><span>Harness, LLMOps, ML/LLM/RAG eval</span></a>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="footer">Practice simulator only. Not affiliated with or endorsed by Pluralsight. Progress and imported custom questions are stored locally in this browser.</footer>
+</body>
+</html>
