@@ -66,6 +66,23 @@ function normalizeImportedQuestion(q, i, defaults={}){
   return validateQuestion(obj) ? obj : null;
 }
 
+
+function openSetupRail(){
+  const rail = $('#setupRail');
+  if(!rail) return;
+  rail.classList.add('open');
+  document.body.classList.add('rail-open');
+}
+function closeSetupRail(){
+  const rail = $('#setupRail');
+  if(!rail) return;
+  rail.classList.remove('open');
+  document.body.classList.remove('rail-open');
+}
+function scrollMainToTop(){
+  try { window.scrollTo({top:0, left:0, behavior:'auto'}); } catch(e) { window.scrollTo(0,0); }
+}
+
 let state = {
   view:'dashboard', mode:'learn', banks:new Set(), topics:new Set(), diffs:new Set(DIFFS),
   session:[], idx:0, selected:null, answers:[], timer:null, endAt:null
@@ -93,9 +110,7 @@ function init(){
 function bindEvents(){
   $('#homeLink').addEventListener('click', e=>{e.preventDefault(); showView('dashboard');});
   $$('.nav-btn').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
-  const setupRail = $('#setupRail');
-  const openSetupRail = () => { setupRail.classList.add('open'); document.body.classList.add('rail-open'); };
-  const closeSetupRail = () => { setupRail.classList.remove('open'); document.body.classList.remove('rail-open'); };
+  document.addEventListener('keydown', e => { if(e.key === 'Escape') closeSetupRail(); });
   $('#mobileFilters').addEventListener('click', openSetupRail);
   $('#closeRail').addEventListener('click', closeSetupRail);
   $('#themeToggle').addEventListener('click', () => { document.body.dataset.theme = document.body.dataset.theme === 'light' ? '' : 'light'; });
@@ -136,9 +151,16 @@ function showView(view){
   state.view=view;
   $$('.view').forEach(v => v.classList.toggle('active', v.id === view+'View'));
   $$('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view===view));
-  if(view==='concepts') renderConcepts();
+  if(window.innerWidth < 980){
+    const nav = $('.topnav');
+    const activeNav = $(`.nav-btn[data-view="${view}"]`);
+    if(activeNav && activeNav.scrollIntoView) activeNav.scrollIntoView({block:'nearest', inline:'center'});
+    else if(nav) nav.scrollLeft = 0;
+  }
+  if(view==='concepts') renderConcepts(false);
   if(view==='setup') updatePoolPreview();
   if(window.innerWidth < 980) closeSetupRail();
+  scrollMainToTop();
 }
 function setMode(mode){
   state.mode=mode;
@@ -257,7 +279,10 @@ function startSession(){
   if(state.endAt) state.timer=setInterval(tick,250);
   $('#sessionModeLabel').textContent = state.mode==='learn' ? 'Learning Mode' : state.mode==='exam' ? 'Exam Mode' : 'Skill IQ-style Sprint';
   $('#sessionTitle').textContent = state.mode==='skill' ? 'Mixed timed practice' : 'Question Session';
-  showView('session'); renderQuestion(); tick();
+  closeSetupRail();
+  showView('session');
+  renderQuestion();
+  tick();
 }
 function tick(){
   if(!state.endAt){ $('#timer').textContent='Practice'; return; }
@@ -266,9 +291,27 @@ function tick(){
   if(sec<=0){ clearInterval(state.timer); finishSession(); }
 }
 function renderQuestion(){
-  const q=state.session[state.idx]; state.selected=null;
+  const q=state.session[state.idx];
+  state.selected=null;
+  if(!q){
+    $('#progressText').textContent='0/0';
+    $('#progressFill').style.width='0%';
+    $('#liveScore').textContent='0%';
+    $('#qBank').textContent='No active question';
+    $('#qTopic').textContent='Check filters';
+    $('#qDifficulty').textContent='';
+    $('#questionText').textContent='No question could be loaded. Go back to Setup, select at least one bank, and start again.';
+    $('#choices').innerHTML='';
+    $('#feedback').className='feedback bad';
+    $('#feedback').innerHTML='<h3>No question loaded</h3><p>This usually means the selected filters returned no usable questions or a previous mobile overlay interrupted the session. Return to Setup and start a new session.</p>';
+    $('#submitAnswer').classList.add('hidden');
+    $('#nextQuestion').classList.add('hidden');
+    return;
+  }
+  $('#submitAnswer').classList.remove('hidden');
+  const safeLen = Math.max(1, state.session.length);
   $('#progressText').textContent=`${state.idx+1}/${state.session.length}`;
-  $('#progressFill').style.width=`${Math.round((state.idx/state.session.length)*100)}%`;
+  $('#progressFill').style.width=`${Math.round((state.idx/safeLen)*100)}%`;
   $('#liveScore').textContent=`${pct(state.answers.filter(a=>a.correct).length,state.answers.length)}%`;
   $('#qBank').textContent=q.bank; $('#qTopic').textContent=q.topic; $('#qDifficulty').textContent=q.difficulty;
   $('#questionText').textContent=q.question;
@@ -280,7 +323,10 @@ function renderQuestion(){
 function selectChoice(i){ state.selected=i; $$('#choices .choice').forEach((b,idx)=>b.classList.toggle('selected',idx===i)); }
 function submitAnswer(){
   if(state.selected==null){ alert('Select an answer first.'); return; }
-  const q=state.session[state.idx]; const correct=state.selected===q.correctOptionIndex;
+  const q=state.session[state.idx];
+  if(!q){ alert('No active question is loaded. Please return to setup and start again.'); return; }
+  if(q.selectedIndex !== null){ return; }
+  const correct=state.selected===q.correctOptionIndex;
   q.selectedIndex=state.selected; q.isCorrect=correct;
   state.answers.push({id:q.id, correct, selected:state.selected, correctIndex:q.correctOptionIndex, question:q}); markAnswered(q, correct);
   if(state.mode==='learn'){
@@ -291,7 +337,7 @@ function submitAnswer(){
     $('#liveScore').textContent=`${pct(state.answers.filter(a=>a.correct).length,state.answers.length)}%`;
   } else nextQuestion();
 }
-function nextQuestion(){ if(state.idx < state.session.length-1){ state.idx++; renderQuestion(); } else finishSession(); }
+function nextQuestion(){ if(!state.session.length){ showView('setup'); return; } if(state.idx < state.session.length-1){ state.idx++; renderQuestion(); } else finishSession(); }
 function finishSession(){
   clearInterval(state.timer); if(!state.session.length) return;
   const total=state.session.length, answered=state.answers.length, correct=state.answers.filter(a=>a.correct).length, score=pct(correct,total); saveBest(score);
@@ -315,11 +361,11 @@ function reviewList(){
   return state.session.map((q,i)=>{ const a=state.answers.find(x=>x.id===q.id); const cls=!a?'skipped':a.correct?'correct':'wrong'; const sel=a?q.options[a.selected].text:'Not answered'; return `<div class="review-item ${cls}"><p><b>${i+1}. ${esc(q.question)}</b></p><p>${!a?'Skipped':a.correct?'Correct':'Wrong'} • Your answer: ${esc(sel)}</p><p><b>Correct:</b> ${esc(q.options[q.correctOptionIndex].text)}</p><p>${esc(q.explanation)}</p></div>`; }).join('');
 }
 
-function renderConcepts(){
+function renderConcepts(activate=true){
   const cat=$('#conceptCategory').value || 'All'; const cards=CONCEPTS.filter(c=>cat==='All'||c.category===cat);
   $('#conceptPanel').innerHTML=`<div class="concept-head panel"><div><p class="eyebrow">Concept Mode</p><h1>${esc(cat)} Knowledge Cards</h1><p>Study these before practice. Each card focuses on common reasoning traps in Skill IQ-style questions.</p></div><button class="primary" id="conceptPracticeBtn">Practice questions</button></div><div class="concept-grid">${cards.map(c=>`<article class="concept-card"><span class="mini-badge">${esc(c.category)}</span><h3>${esc(c.title)}</h3><p>${esc(c.body)}</p><ul>${(c.keyPoints||[]).map(k=>`<li>${esc(k)}</li>`).join('')}</ul><div class="pitfall"><b>Test trap:</b> ${esc(c.pitfall||'')}</div></article>`).join('')}</div>`;
   $('#conceptPracticeBtn').addEventListener('click', () => { setMode('learn'); showView('setup'); });
-  showView('concepts');
+  if(activate) showView('concepts');
 }
 
 async function parseImportFile(){
