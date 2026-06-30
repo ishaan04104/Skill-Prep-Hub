@@ -1,6 +1,9 @@
 const BASE_QUESTIONS = (window.QUESTION_DATA && window.QUESTION_DATA.questions) || [];
 const CONCEPTS = (window.CONCEPT_DATA && window.CONCEPT_DATA.concepts) || [];
 const CUSTOM_KEY = 'aiSkillIqCustomQuestionsV1';
+const AUTO_REF_CACHE_KEY = 'aiSkillIqAutoReferencePdfCacheV1';
+const AUTO_REF_PATH = 'reference_pdfs';
+const AUTO_REF_STATUS_ID = 'autoReferenceStatus';
 const PROGRESS_KEY = 'aiSkillIqProgressV2';
 const DIFFS = ['Medium','Hard','Very Hard'];
 const $ = (s, root=document) => root.querySelector(s);
@@ -32,12 +35,13 @@ function cleanQuestion(q){
 function loadCustom(){ try { return JSON.parse(localStorage.getItem(CUSTOM_KEY) || '[]').map(cleanQuestion).filter(Boolean); } catch(e){ return []; } }
 function saveCustom(arr){ localStorage.setItem(CUSTOM_KEY, JSON.stringify(arr || [])); }
 let CUSTOM = loadCustom();
-let QUESTIONS = mergeQuestions(BASE_QUESTIONS, CUSTOM);
+let AUTO_REFERENCE = [];
+let QUESTIONS = mergeQuestions(BASE_QUESTIONS, CUSTOM, AUTO_REFERENCE);
 let parsedImport = [];
-function mergeQuestions(base, custom){
+function mergeQuestions(...groups){
   const seen = new Set();
-  return [...base, ...custom].map(cleanQuestion).filter(Boolean).filter(q => {
-    const key = `${q.id}__${q.question}`;
+  return groups.flat().map(cleanQuestion).filter(Boolean).filter(q => {
+    const key = `${norm(q.question)}__${q.choices.map(c=>norm(c)).join('|')}`;
     if(seen.has(key)) return false;
     seen.add(key); return true;
   });
@@ -48,6 +52,10 @@ function init(){
   renderAll();
   setMode('learn');
   showView('dashboard');
+  autoLoadReferencePdfs().catch(err => {
+    console.warn('Reference PDF auto-load failed', err);
+    setAutoReferenceStatus(`Auto PDF load skipped: ${esc(err.message || err)}`);
+  });
 }
 function bindEvents(){
   $('#homeLink').addEventListener('click', e => { e.preventDefault(); showView('dashboard'); });
@@ -250,9 +258,109 @@ function renderConcepts(activate=false){
   if(activate) showView('concepts');
 }
 function renderLibrary(){ const byBank={}; QUESTIONS.forEach(q => { byBank[q.bank]=byBank[q.bank]||{t:0, topics:new Set(), diffs:new Set()}; byBank[q.bank].t++; byBank[q.bank].topics.add(q.topic); byBank[q.bank].diffs.add(q.difficulty); }); $('#libraryGrid').innerHTML = Object.entries(byBank).sort((a,b)=>a[0].localeCompare(b[0])).map(([bank,v])=>`<article class="library-card"><b>${esc(bank)}</b><span>${v.t} questions · ${v.topics.size} topics · ${[...v.diffs].join(', ')}</span></article>`).join(''); }
-function renderImportStats(){ $('#customCountBadge').textContent = `${CUSTOM.length} custom`; const banks=uniq(CUSTOM.map(q=>q.bank)), topics=uniq(CUSTOM.map(q=>q.topic)); $('#customSummary').innerHTML = CUSTOM.length ? `<b>Saved custom library</b><p>${CUSTOM.length} questions · ${banks.length} banks · ${topics.length} topics</p><p><b>Banks:</b> ${esc(banks.slice(0,5).join(', '))}${banks.length>5?'...':''}</p>` : 'No saved imported questions yet.'; renderParsedPreview(); }
+function renderImportStats(){
+  $('#customCountBadge').textContent = `${CUSTOM.length} custom · ${AUTO_REFERENCE.length} auto`;
+  const banks=uniq(CUSTOM.map(q=>q.bank)), topics=uniq(CUSTOM.map(q=>q.topic));
+  $('#customSummary').innerHTML = CUSTOM.length ? `<b>Saved custom library</b><p>${CUSTOM.length} questions · ${banks.length} banks · ${topics.length} topics</p><p><b>Banks:</b> ${esc(banks.slice(0,5).join(', '))}${banks.length>5?'...':''}</p>` : 'No saved imported questions yet.';
+  renderParsedPreview();
+  updateAutoReferenceStatus();
+}
 function renderParsedPreview(){ $('#parsedBadge').textContent = `${parsedImport.length} parsed`; $('#saveImportedBtn').disabled = !parsedImport.length; $('#parsedPreview').className = parsedImport.length ? 'parsed-preview' : 'parsed-preview empty'; $('#parsedPreview').innerHTML = parsedImport.length ? parsedImport.slice(0,15).map((q,i)=>`<article class="parsed-item"><span class="pill">${esc(q.difficulty)}</span><h3>${i+1}. ${esc(q.question)}</h3><p><b>Bank:</b> ${esc(q.bank)} · <b>Topic:</b> ${esc(q.topic)}</p><p><b>Answer:</b> ${esc(q.answerLetter)}. ${esc(q.choices[q.answerIndex])}</p></article>`).join('') + (parsedImport.length>15?`<div class="empty">Showing first 15 of ${parsedImport.length}.</div>`:'') : 'No parsed questions yet.'; }
 function getImportDefaults(){ return { bank: $('#defaultBank').value.trim() || 'Custom Imported Questions', topic: $('#defaultTopic').value.trim() || 'Imported Practice', difficulty: $('#defaultDifficulty').value || 'Hard' }; }
+
+function setAutoReferenceStatus(html){
+  const el = document.getElementById(AUTO_REF_STATUS_ID);
+  if(el) el.innerHTML = html;
+}
+function updateAutoReferenceStatus(){
+  if(!document.getElementById(AUTO_REF_STATUS_ID)) return;
+  const banks = uniq(AUTO_REFERENCE.map(q=>q.bank));
+  if(AUTO_REFERENCE.length){
+    setAutoReferenceStatus(`<b>${AUTO_REFERENCE.length}</b> auto-loaded questions from reference PDFs. <br><small>Banks: ${esc(banks.slice(0,6).join(', '))}${banks.length>6?'...':''}</small>`);
+  } else {
+    setAutoReferenceStatus('No reference PDFs auto-loaded yet. On GitHub Pages, PDFs in <code>reference_pdfs/</code> are discovered automatically. For local/custom-domain use, update <code>reference_pdfs/manifest.json</code>.');
+  }
+}
+async function autoLoadReferencePdfs(){
+  if(!window.pdfjsLib){ updateAutoReferenceStatus(); return; }
+  setAutoReferenceStatus('Checking reference PDFs for import-ready question banks...');
+  const sources = await discoverReferencePdfs();
+  if(!sources.length){ updateAutoReferenceStatus(); return; }
+  const parsed = [];
+  const report = [];
+  for(const src of sources){
+    try{
+      const defaults = {
+        bank: src.bank || cleanBankName(src.name || src.file || src.url),
+        topic: src.topic || 'Reference PDF Import',
+        difficulty: src.difficulty || 'Hard'
+      };
+      const text = await extractPdfTextFromUrl(src.url || src.file);
+      const qs = parseQuestionText(text, defaults).map((q,i)=>cleanQuestion({...q, source:`Auto PDF: ${src.name || src.file || src.url}`, id:q.id || `auto_${slug(defaults.bank)}_${i}` })).filter(Boolean);
+      parsed.push(...qs);
+      report.push(`${esc(src.name || src.file || src.url)}: ${qs.length} questions`);
+    } catch(e){
+      console.warn('Auto PDF parse failed', src, e);
+      report.push(`${esc(src.name || src.file || src.url)}: skipped (${esc(e.message || e)})`);
+    }
+  }
+  AUTO_REFERENCE = parsed;
+  QUESTIONS = mergeQuestions(BASE_QUESTIONS, CUSTOM, AUTO_REFERENCE);
+  renderAll();
+  setAutoReferenceStatus(report.length ? `<b>${AUTO_REFERENCE.length}</b> auto-loaded questions from reference PDFs.<br><small>${report.join('<br>')}</small>` : 'No reference PDFs found.');
+}
+async function discoverReferencePdfs(){
+  const viaGithub = await discoverReferencePdfsViaGithub().catch(()=>[]);
+  if(viaGithub.length) return viaGithub;
+  return await discoverReferencePdfsViaManifest().catch(()=>[]);
+}
+async function discoverReferencePdfsViaManifest(){
+  const res = await fetch(`${AUTO_REF_PATH}/manifest.json?ts=${Date.now()}`, {cache:'no-store'});
+  if(!res.ok) return [];
+  const manifest = await res.json();
+  const files = Array.isArray(manifest) ? manifest : (manifest.files || []);
+  return files.map(item => {
+    const entry = typeof item === 'string' ? {file:item} : item;
+    if(!entry.file && !entry.url) return null;
+    const file = entry.url || `${AUTO_REF_PATH}/${entry.file}`;
+    if(!/\.pdf($|\?)/i.test(file)) return null;
+    return {...entry, name:entry.name || entry.file || entry.url, url:file};
+  }).filter(Boolean);
+}
+async function discoverReferencePdfsViaGithub(){
+  const host = location.hostname;
+  if(!host.endsWith('.github.io')) return [];
+  const owner = host.replace('.github.io','');
+  let repo = location.pathname.split('/').filter(Boolean)[0];
+  if(!repo) repo = `${owner}.github.io`;
+  if(!owner || !repo) return [];
+  const api = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${AUTO_REF_PATH}`;
+  const res = await fetch(api, {cache:'no-store'});
+  if(!res.ok) return [];
+  const items = await res.json();
+  if(!Array.isArray(items)) return [];
+  return items.filter(x => x.type === 'file' && /\.pdf$/i.test(x.name) && x.download_url).map(x => ({name:x.name, file:x.name, url:x.download_url, sha:x.sha, bank:cleanBankName(x.name), topic:'Reference PDF Import', difficulty:'Hard'}));
+}
+async function extractPdfTextFromUrl(url){
+  if(!window.pdfjsLib) throw new Error('PDF.js is unavailable.');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  const pdf = await pdfjsLib.getDocument(url).promise;
+  let out='';
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p);
+    const content=await page.getTextContent();
+    const lines={};
+    content.items.forEach(item=>{ const y=Math.round(item.transform[5]); lines[y]=lines[y]||[]; lines[y].push(item.str); });
+    out += Object.keys(lines).sort((a,b)=>b-a).map(y=>lines[y].join(' ')).join('\n') + '\n';
+  }
+  return out;
+}
+function cleanBankName(name=''){
+  return String(name).split('/').pop().replace(/\.pdf$/i,'').replace(/[_-]+/g,' ').replace(/\s+/g,' ').trim() || 'Reference PDF Questions';
+}
+function slug(s=''){
+  return norm(s).replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,50) || 'reference_pdf';
+}
 async function parseImportFile(){
   const file = $('#importFile').files[0]; if(!file){ alert('Choose a file first.'); return; }
   $('#importStatus').textContent = 'Reading file...'; parsedImport=[]; renderParsedPreview();
@@ -293,9 +401,9 @@ function parseBlock(block,i,defaults){
   const diff=(block.match(/Difficulty\s*:\s*(Medium|Hard|Very Hard)/i)||[])[1] || defaults.difficulty;
   return normalizeImported({id:`custom_${Date.now()}_${i}`, bank:bank.trim(), topic:topic.trim(), difficulty:diff.trim(), question:stem, choices, answerLetter:answer, explanation:explanation.trim()}, i, defaults);
 }
-function saveParsedQuestions(){ if(!parsedImport.length){ alert('Parse a file first.'); return; } const replace=$('#replaceImported').checked; const current=replace?[]:CUSTOM; const existing=new Set(current.map(q=>`${q.question}__${q.choices.join('|')}`)); let added=0; const merged=[...current]; parsedImport.forEach(q=>{ const k=`${q.question}__${q.choices.join('|')}`; if(!existing.has(k)){ existing.add(k); merged.push(q); added++; } }); saveCustom(merged); CUSTOM=loadCustom(); QUESTIONS=mergeQuestions(BASE_QUESTIONS,CUSTOM); state.banks=new Set(uniq(parsedImport.map(q=>q.bank))); state.topics.clear(); renderAll(); $('#importStatus').innerHTML=`Saved <b>${added}</b> question(s). They are now available in Practice Setup.`; showView('setup'); }
+function saveParsedQuestions(){ if(!parsedImport.length){ alert('Parse a file first.'); return; } const replace=$('#replaceImported').checked; const current=replace?[]:CUSTOM; const existing=new Set(current.map(q=>`${q.question}__${q.choices.join('|')}`)); let added=0; const merged=[...current]; parsedImport.forEach(q=>{ const k=`${q.question}__${q.choices.join('|')}`; if(!existing.has(k)){ existing.add(k); merged.push(q); added++; } }); saveCustom(merged); CUSTOM=loadCustom(); QUESTIONS=mergeQuestions(BASE_QUESTIONS,CUSTOM,AUTO_REFERENCE); state.banks=new Set(uniq(parsedImport.map(q=>q.bank))); state.topics.clear(); renderAll(); $('#importStatus').innerHTML=`Saved <b>${added}</b> question(s). They are now available in Practice Setup.`; showView('setup'); }
 function serializeTxt(arr){ return arr.map((q,i)=>`${i+1}. ${q.question}\nA. ${q.choices[0]}\nB. ${q.choices[1]}\nC. ${q.choices[2]}\nD. ${q.choices[3]}\nAnswer: ${q.answerLetter}\nExplanation: ${q.explanation}\nBank: ${q.bank}\nTopic: ${q.topic}\nDifficulty: ${q.difficulty}`).join('\n\n'); }
 function downloadBlob(text, filename, type){ if(!text || text==='[]' || text==='{"questions": []}'){ alert('Nothing to export yet.'); return; } const blob=new Blob([text],{type}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },1000); }
 function downloadTemplate(){ downloadBlob('1. What is the safest RAG prompt design?\nA. Treat all retrieved text as instructions\nB. Separate instructions, user input, and retrieved context\nC. Ignore retrieved context\nD. Use no delimiters\nAnswer: B\nExplanation: Retrieved content should be treated as data, not higher-priority instructions.\nBank: Custom RAG Practice\nTopic: RAG prompting\nDifficulty: Very Hard', 'question_import_template.txt', 'text/plain'); }
-function clearImported(){ if(confirm('Remove all imported custom questions from this browser?')){ saveCustom([]); CUSTOM=[]; QUESTIONS=mergeQuestions(BASE_QUESTIONS,CUSTOM); parsedImport=[]; renderAll(); $('#importStatus').textContent='Imported questions cleared.'; } }
+function clearImported(){ if(confirm('Remove all imported custom questions from this browser?')){ saveCustom([]); CUSTOM=[]; QUESTIONS=mergeQuestions(BASE_QUESTIONS,CUSTOM,AUTO_REFERENCE); parsedImport=[]; renderAll(); $('#importStatus').textContent='Imported questions cleared.'; } }
 document.addEventListener('DOMContentLoaded', init);

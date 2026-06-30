@@ -1,19 +1,48 @@
-# AI Skill IQ Prep Hub v8
+# AI Skill IQ Prep Hub v9
 
-Mobile-stable static version. Replace at least `index.html`, `styles.css`, and `app.js` together because the JavaScript and HTML are matched.
+Open `index.html` directly or host the folder on GitHub Pages.
 
-## Publish update on GitHub Pages
-Upload/replace these files in the repo root:
+## Permanent PDF auto-load
 
-- index.html
-- styles.css
-- app.js
-- data/ folder if you want to refresh built-in data
-- import_banks/ folder if you want downloadable/importable banks
+On GitHub Pages, the app now tries to auto-discover and parse every import-ready PDF inside:
 
-Then commit and open your site with a cache buster, for example:
+```
+reference_pdfs/
+```
 
-`https://YOUR_USERNAME.github.io/ai-skill-iq-prep-hub/?v=8`
+So for your hosted site, you can add a new formatted question-bank PDF to `reference_pdfs/`, commit it, wait for GitHub Pages to redeploy, and refresh the site with a cache-busting query such as `?v=newpdf1`.
 
-## Why v8
-This version removes the fixed mobile drawer and uses a normal mobile-first Setup page. That avoids iOS Safari overlay/scroll/session state bugs.
+The PDF must use the app's import format:
+
+```
+1. Question text?
+A. Option A
+B. Option B
+C. Option C
+D. Option D
+Answer: B
+Explanation: Explanation here.
+Bank: Bank name
+Topic: Topic name
+Difficulty: Hard
+```
+
+## Local/custom-domain fallback
+
+Browsers cannot list local folders. If you open the app from `file://` or use a custom domain where GitHub repo details cannot be inferred, update:
+
+```
+reference_pdfs/manifest.json
+```
+
+Example:
+
+```json
+{
+  "files": [
+    {"file": "my_new_questions.pdf", "bank": "My New Questions", "topic": "Imported PDF", "difficulty": "Very Hard"}
+  ]
+}
+```
+
+JSON remains the most reliable permanent format, but PDF auto-load now works for selectable-text PDFs following the required format.
