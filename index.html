@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;650;750;850;950&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=10" />
+  <link rel="stylesheet" href="styles.css?v=11" />
 </head>
 <body>
   <div class="bg-grid"></div>
@@ -38,7 +38,6 @@
           <div class="actions">
             <button class="primary" id="quickSprint" type="button">Start mixed sprint</button>
             <button class="secondary" data-go="setup" type="button">Build custom session</button>
-            <button class="secondary" id="practiceMistakes" type="button">Practice missed questions</button>
           </div>
         </div>
         <div class="score-ring"><span id="totalQuestionsHero">0</span><small>MCQs</small></div>
@@ -125,7 +124,7 @@
       </div>
       <div class="progress"><i id="progressFill"></i></div>
       <article class="question-card card">
-        <div class="q-meta"><span id="qBank"></span><span id="qTopic"></span><span id="qDifficulty"></span><span id="qHistoryBadge" class="history-badge"></span></div>
+        <div class="q-meta"><span id="qBank"></span><span id="qTopic"></span><span id="qDifficulty"></span></div>
         <h2 id="questionText">Question will appear here.</h2>
         <div id="choices" class="choices"></div>
         <div id="feedback" class="feedback hidden"></div>
@@ -173,8 +172,6 @@
           <div id="importStatus" class="status-box">Upload a file, parse it, review the preview, then save.</div>
           <div class="actions"><button id="exportCustomBtn" class="secondary" type="button">Export custom JSON</button><button id="exportCustomTxtBtn" class="secondary" type="button">Export custom TXT</button><button id="downloadTemplateBtn" class="secondary" type="button">Download TXT template</button><button id="clearCustomBtn" class="danger" type="button">Clear imported</button></div>
           <div id="customSummary" class="summary-box"></div>
-          <div id="autoReferenceStatus" class="status-box">Checking reference PDFs...</div>
-          <div class="actions compact-actions"><button id="refreshReferencePdfsBtn" class="secondary" type="button">Refresh reference PDFs</button><button id="clearReferenceCacheBtn" class="secondary" type="button">Clear PDF cache</button></div>
         </section>
       </div>
       <section class="card import-preview"><div class="card-title"><h2>Parsed preview</h2><span class="pill" id="parsedBadge">0 parsed</span></div><div id="parsedPreview" class="parsed-preview empty">No parsed questions yet.</div></section>
@@ -192,9 +189,10 @@
 
   <footer>Practice simulator only. Not affiliated with or endorsed by Pluralsight. Progress and imported custom questions are stored locally in this browser.</footer>
 
+  <script>window.APP_VERSION = "v11-json-loader-oldbase";</script>
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
-  <script src="data/questions.js?v=10"></script>
-  <script src="data/concepts.js?v=10"></script>
-  <script src="app.js?v=10"></script>
+  <script src="data/questions.js?v=11"></script>
+  <script src="data/concepts.js?v=11"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>

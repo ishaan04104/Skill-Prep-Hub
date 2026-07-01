@@ -1,4 +1,6 @@
 const BASE_QUESTIONS = (window.QUESTION_DATA && window.QUESTION_DATA.questions) || [];
+let JSON_QUESTIONS = [];
+const JSON_QUESTIONS_PATH = 'data/questions.json';
 const CONCEPTS = (window.CONCEPT_DATA && window.CONCEPT_DATA.concepts) || [];
 const CUSTOM_KEY = 'aiSkillIqCustomQuestionsV1';
 const AUTO_REF_CACHE_KEY = 'aiSkillIqAutoReferencePdfCacheV2';
@@ -34,6 +36,24 @@ function cleanQuestion(q){
 }
 function loadCustom(){ try { return JSON.parse(localStorage.getItem(CUSTOM_KEY) || '[]').map(cleanQuestion).filter(Boolean); } catch(e){ return []; } }
 function saveCustom(arr){ localStorage.setItem(CUSTOM_KEY, JSON.stringify(arr || [])); }
+async function loadJsonQuestions(){
+  try{
+    const version = encodeURIComponent(window.APP_VERSION || 'v11-json-loader');
+    const res = await fetch(`${JSON_QUESTIONS_PATH}?v=${version}`, {cache:'no-cache'});
+    if(!res.ok){
+      console.info(`Optional ${JSON_QUESTIONS_PATH} not loaded: HTTP ${res.status}`);
+      return [];
+    }
+    const raw = await res.json();
+    const arr = Array.isArray(raw) ? raw : (Array.isArray(raw.questions) ? raw.questions : []);
+    const cleaned = arr.map((q,i) => cleanQuestion({...q, id:q.id || `json_${i+1}`})).filter(Boolean);
+    console.info(`Loaded ${cleaned.length} questions from ${JSON_QUESTIONS_PATH}`);
+    return cleaned;
+  } catch(e){
+    console.warn(`Could not load ${JSON_QUESTIONS_PATH}. The app will continue with questions.js only.`, e);
+    return [];
+  }
+}
 function loadAutoReferenceCache(){
   try{
     const raw = JSON.parse(localStorage.getItem(AUTO_REF_CACHE_KEY) || 'null');
@@ -48,11 +68,11 @@ function loadAutoReferenceCache(){
   } catch(e){ return {questions:[], signature:null, report:[], fetchedAt:null}; }
 }
 function saveAutoReferenceCache(payload){ localStorage.setItem(AUTO_REF_CACHE_KEY, JSON.stringify(payload || {questions:[]})); }
-function clearAutoReferenceCache(){ localStorage.removeItem(AUTO_REF_CACHE_KEY); AUTO_REFERENCE_CACHE={questions:[], signature:null, report:[], fetchedAt:null}; AUTO_REFERENCE=[]; QUESTIONS=mergeQuestions(BASE_QUESTIONS,CUSTOM,AUTO_REFERENCE); renderAll(); }
+function clearAutoReferenceCache(){ localStorage.removeItem(AUTO_REF_CACHE_KEY); AUTO_REFERENCE_CACHE={questions:[], signature:null, report:[], fetchedAt:null}; AUTO_REFERENCE=[]; QUESTIONS=mergeQuestions(BASE_QUESTIONS,JSON_QUESTIONS,CUSTOM,AUTO_REFERENCE); renderAll(); }
 let CUSTOM = loadCustom();
 let AUTO_REFERENCE_CACHE = loadAutoReferenceCache();
 let AUTO_REFERENCE = AUTO_REFERENCE_CACHE.questions || [];
-let QUESTIONS = mergeQuestions(BASE_QUESTIONS, CUSTOM, AUTO_REFERENCE);
+let QUESTIONS = mergeQuestions(BASE_QUESTIONS, JSON_QUESTIONS, CUSTOM, AUTO_REFERENCE);
 let parsedImport = [];
 function mergeQuestions(...groups){
   const seen = new Set();
@@ -63,7 +83,9 @@ function mergeQuestions(...groups){
   });
 }
 let state = { view:'dashboard', mode:'learn', banks:new Set(), topics:new Set(), diffs:new Set(DIFFS), session:[], idx:0, selected:null, answers:[], timer:null, endAt:null, overridePool:null };
-function init(){
+async function init(){
+  JSON_QUESTIONS = await loadJsonQuestions();
+  QUESTIONS = mergeQuestions(BASE_QUESTIONS, JSON_QUESTIONS, CUSTOM, AUTO_REFERENCE);
   bindEvents();
   renderAll();
   setMode('learn');
@@ -386,7 +408,7 @@ async function autoLoadReferencePdfs(opts={}){
   if(cached.questions.length && !force){
     AUTO_REFERENCE_CACHE = cached;
     AUTO_REFERENCE = cached.questions;
-    QUESTIONS = mergeQuestions(BASE_QUESTIONS, CUSTOM, AUTO_REFERENCE);
+    QUESTIONS = mergeQuestions(BASE_QUESTIONS, JSON_QUESTIONS, CUSTOM, AUTO_REFERENCE);
     renderAll();
     setAutoReferenceStatus(`<b>${AUTO_REFERENCE.length}</b> cached reference PDF questions loaded instantly. Checking for new or changed PDFs in the background...`);
   } else if(force){
@@ -404,7 +426,7 @@ async function autoLoadReferencePdfs(opts={}){
   if(!force && cached.questions.length && cached.signature === signature){
     AUTO_REFERENCE_CACHE = cached;
     AUTO_REFERENCE = cached.questions;
-    QUESTIONS = mergeQuestions(BASE_QUESTIONS, CUSTOM, AUTO_REFERENCE);
+    QUESTIONS = mergeQuestions(BASE_QUESTIONS, JSON_QUESTIONS, CUSTOM, AUTO_REFERENCE);
     renderAll();
     setAutoReferenceStatus(`<b>${AUTO_REFERENCE.length}</b> reference PDF questions loaded from cache. No PDF changes detected.`);
     return;
@@ -435,7 +457,7 @@ async function autoLoadReferencePdfs(opts={}){
   AUTO_REFERENCE = parsed;
   AUTO_REFERENCE_CACHE = {signature, questions: parsed, sources, report, fetchedAt: new Date().toISOString()};
   saveAutoReferenceCache(AUTO_REFERENCE_CACHE);
-  QUESTIONS = mergeQuestions(BASE_QUESTIONS, CUSTOM, AUTO_REFERENCE);
+  QUESTIONS = mergeQuestions(BASE_QUESTIONS, JSON_QUESTIONS, CUSTOM, AUTO_REFERENCE);
   renderAll();
   setAutoReferenceStatus(report.length ? `<b>${AUTO_REFERENCE.length}</b> reference PDF questions parsed once and cached locally.<br><small>${report.join('<br>')}</small>` : 'No reference PDFs found.');
 }
@@ -540,9 +562,9 @@ function parseBlock(block,i,defaults){
   const diff=(block.match(/Difficulty\s*:\s*(Medium|Hard|Very Hard)/i)||[])[1] || defaults.difficulty;
   return normalizeImported({id:`custom_${Date.now()}_${i}`, bank:bank.trim(), topic:topic.trim(), difficulty:diff.trim(), question:stem, choices, answerLetter:answer, explanation:explanation.trim()}, i, defaults);
 }
-function saveParsedQuestions(){ if(!parsedImport.length){ alert('Parse a file first.'); return; } const replace=$('#replaceImported').checked; const current=replace?[]:CUSTOM; const existing=new Set(current.map(q=>`${q.question}__${q.choices.join('|')}`)); let added=0; const merged=[...current]; parsedImport.forEach(q=>{ const k=`${q.question}__${q.choices.join('|')}`; if(!existing.has(k)){ existing.add(k); merged.push(q); added++; } }); saveCustom(merged); CUSTOM=loadCustom(); QUESTIONS=mergeQuestions(BASE_QUESTIONS,CUSTOM,AUTO_REFERENCE); state.banks=new Set(uniq(parsedImport.map(q=>q.bank))); state.topics.clear(); renderAll(); $('#importStatus').innerHTML=`Saved <b>${added}</b> question(s). They are now available in Practice Setup.`; showView('setup'); }
+function saveParsedQuestions(){ if(!parsedImport.length){ alert('Parse a file first.'); return; } const replace=$('#replaceImported').checked; const current=replace?[]:CUSTOM; const existing=new Set(current.map(q=>`${q.question}__${q.choices.join('|')}`)); let added=0; const merged=[...current]; parsedImport.forEach(q=>{ const k=`${q.question}__${q.choices.join('|')}`; if(!existing.has(k)){ existing.add(k); merged.push(q); added++; } }); saveCustom(merged); CUSTOM=loadCustom(); QUESTIONS=mergeQuestions(BASE_QUESTIONS,JSON_QUESTIONS,CUSTOM,AUTO_REFERENCE); state.banks=new Set(uniq(parsedImport.map(q=>q.bank))); state.topics.clear(); renderAll(); $('#importStatus').innerHTML=`Saved <b>${added}</b> question(s). They are now available in Practice Setup.`; showView('setup'); }
 function serializeTxt(arr){ return arr.map((q,i)=>`${i+1}. ${q.question}\nA. ${q.choices[0]}\nB. ${q.choices[1]}\nC. ${q.choices[2]}\nD. ${q.choices[3]}\nAnswer: ${q.answerLetter}\nExplanation: ${q.explanation}\nBank: ${q.bank}\nTopic: ${q.topic}\nDifficulty: ${q.difficulty}`).join('\n\n'); }
 function downloadBlob(text, filename, type){ if(!text || text==='[]' || text==='{"questions": []}'){ alert('Nothing to export yet.'); return; } const blob=new Blob([text],{type}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },1000); }
 function downloadTemplate(){ downloadBlob('1. What is the safest RAG prompt design?\nA. Treat all retrieved text as instructions\nB. Separate instructions, user input, and retrieved context\nC. Ignore retrieved context\nD. Use no delimiters\nAnswer: B\nExplanation: Retrieved content should be treated as data, not higher-priority instructions.\nBank: Custom RAG Practice\nTopic: RAG prompting\nDifficulty: Very Hard', 'question_import_template.txt', 'text/plain'); }
-function clearImported(){ if(confirm('Remove all imported custom questions from this browser?')){ saveCustom([]); CUSTOM=[]; QUESTIONS=mergeQuestions(BASE_QUESTIONS,CUSTOM,AUTO_REFERENCE); parsedImport=[]; renderAll(); $('#importStatus').textContent='Imported questions cleared.'; } }
-document.addEventListener('DOMContentLoaded', init);
+function clearImported(){ if(confirm('Remove all imported custom questions from this browser?')){ saveCustom([]); CUSTOM=[]; QUESTIONS=mergeQuestions(BASE_QUESTIONS,JSON_QUESTIONS,CUSTOM,AUTO_REFERENCE); parsedImport=[]; renderAll(); $('#importStatus').textContent='Imported questions cleared.'; } }
+document.addEventListener('DOMContentLoaded', () => init().catch(err => console.error('App init failed', err)));
