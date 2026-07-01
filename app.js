@@ -1,10 +1,10 @@
 const BASE_QUESTIONS = (window.QUESTION_DATA && window.QUESTION_DATA.questions) || [];
 const CONCEPTS = (window.CONCEPT_DATA && window.CONCEPT_DATA.concepts) || [];
 const CUSTOM_KEY = 'aiSkillIqCustomQuestionsV1';
-const AUTO_REF_CACHE_KEY = 'aiSkillIqAutoReferencePdfCacheV1';
+const AUTO_REF_CACHE_KEY = 'aiSkillIqAutoReferencePdfCacheV2';
 const AUTO_REF_PATH = 'reference_pdfs';
 const AUTO_REF_STATUS_ID = 'autoReferenceStatus';
-const PROGRESS_KEY = 'aiSkillIqProgressV2';
+const PROGRESS_KEY = 'aiSkillIqProgressV3';
 const DIFFS = ['Medium','Hard','Very Hard'];
 const $ = (s, root=document) => root.querySelector(s);
 const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -34,8 +34,24 @@ function cleanQuestion(q){
 }
 function loadCustom(){ try { return JSON.parse(localStorage.getItem(CUSTOM_KEY) || '[]').map(cleanQuestion).filter(Boolean); } catch(e){ return []; } }
 function saveCustom(arr){ localStorage.setItem(CUSTOM_KEY, JSON.stringify(arr || [])); }
+function loadAutoReferenceCache(){
+  try{
+    const raw = JSON.parse(localStorage.getItem(AUTO_REF_CACHE_KEY) || 'null');
+    if(!raw || !Array.isArray(raw.questions)) return {questions:[], signature:null, report:[], fetchedAt:null};
+    return {
+      questions: raw.questions.map(cleanQuestion).filter(Boolean),
+      signature: raw.signature || null,
+      report: Array.isArray(raw.report) ? raw.report : [],
+      sources: Array.isArray(raw.sources) ? raw.sources : [],
+      fetchedAt: raw.fetchedAt || null
+    };
+  } catch(e){ return {questions:[], signature:null, report:[], fetchedAt:null}; }
+}
+function saveAutoReferenceCache(payload){ localStorage.setItem(AUTO_REF_CACHE_KEY, JSON.stringify(payload || {questions:[]})); }
+function clearAutoReferenceCache(){ localStorage.removeItem(AUTO_REF_CACHE_KEY); AUTO_REFERENCE_CACHE={questions:[], signature:null, report:[], fetchedAt:null}; AUTO_REFERENCE=[]; QUESTIONS=mergeQuestions(BASE_QUESTIONS,CUSTOM,AUTO_REFERENCE); renderAll(); }
 let CUSTOM = loadCustom();
-let AUTO_REFERENCE = [];
+let AUTO_REFERENCE_CACHE = loadAutoReferenceCache();
+let AUTO_REFERENCE = AUTO_REFERENCE_CACHE.questions || [];
 let QUESTIONS = mergeQuestions(BASE_QUESTIONS, CUSTOM, AUTO_REFERENCE);
 let parsedImport = [];
 function mergeQuestions(...groups){
@@ -46,7 +62,7 @@ function mergeQuestions(...groups){
     seen.add(key); return true;
   });
 }
-let state = { view:'dashboard', mode:'learn', banks:new Set(), topics:new Set(), diffs:new Set(DIFFS), session:[], idx:0, selected:null, answers:[], timer:null, endAt:null };
+let state = { view:'dashboard', mode:'learn', banks:new Set(), topics:new Set(), diffs:new Set(DIFFS), session:[], idx:0, selected:null, answers:[], timer:null, endAt:null, overridePool:null };
 function init(){
   bindEvents();
   renderAll();
@@ -63,6 +79,7 @@ function bindEvents(){
   $$('[data-go]').forEach(b => b.addEventListener('click', () => showView(b.dataset.go)));
   $('#themeToggle').addEventListener('click', () => { document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? '' : 'light'; });
   $('#quickSprint').addEventListener('click', () => { state.banks.clear(); state.topics.clear(); setMode('skill'); startSession(); });
+  $('#practiceMistakes')?.addEventListener('click', startMistakeSession);
   $('#modeGrid').addEventListener('click', e => { const card=e.target.closest('.mode-card'); if(card) setMode(card.dataset.mode); });
   $('#bankSearch').addEventListener('input', renderBankChips);
   $('#topicSearch').addEventListener('input', renderTopicChips);
@@ -88,6 +105,8 @@ function bindEvents(){
   $('#exportCustomTxtBtn').addEventListener('click', () => downloadBlob(serializeTxt(CUSTOM), 'custom_questions_export.txt', 'text/plain'));
   $('#downloadTemplateBtn').addEventListener('click', downloadTemplate);
   $('#clearCustomBtn').addEventListener('click', clearImported);
+  $('#refreshReferencePdfsBtn')?.addEventListener('click', () => autoLoadReferencePdfs({force:true}).catch(err => setAutoReferenceStatus(`Reference PDF refresh failed: ${esc(err.message || err)}`)));
+  $('#clearReferenceCacheBtn')?.addEventListener('click', () => { if(confirm('Clear cached auto-loaded PDF questions from this browser? The site will re-check PDFs on next refresh.')) { clearAutoReferenceCache(); setAutoReferenceStatus('Reference PDF cache cleared for this browser. Click Refresh reference PDFs to load again.'); } });
 }
 function toggle(set, val){ set.has(val) ? set.delete(val) : set.add(val); }
 function renderAll(){ renderFilters(); renderDashboard(); renderLibrary(); renderImportStats(); updatePoolPreview(); }
@@ -158,13 +177,17 @@ function updatePoolPreview(){
 }
 function renderDashboard(){
   const banks=uniq(QUESTIONS.map(q=>q.bank)), topics=uniq(QUESTIONS.map(q=>q.topic));
+  const progressSummary = getProgressSummary();
   $('#totalQuestionsHero').textContent = QUESTIONS.length;
   $('#statsGrid').innerHTML = [
-    ['Total MCQs', QUESTIONS.length, 'Built-in + imported custom questions'],
+    ['Total MCQs', QUESTIONS.length, 'Built-in + imported + cached reference questions'],
     ['Question banks', banks.length, 'Topic-targeted practice sections'],
     ['Topics', topics.length, 'Architecture, RAG, prompt, eval, agents'],
+    ['Needs review', progressSummary.currentWrong, 'Questions last answered incorrectly'],
     ['Concept cards', CONCEPTS.length, 'Study notes before practice']
-  ].map(x=>`<article class="stat card"><span>${x[0]}</span><b>${x[1]}</b><small>${x[2]}</small></article>`).join('');
+  ].map(x=>`<article class="stat card ${x[0]==='Needs review' && x[1] ? 'attention' : ''}"><span>${x[0]}</span><b>${x[1]}</b><small>${x[2]}</small></article>`).join('');
+  const mistakesBtn = $('#practiceMistakes');
+  if(mistakesBtn){ mistakesBtn.disabled = progressSummary.currentWrong === 0; mistakesBtn.textContent = progressSummary.currentWrong ? `Practice ${progressSummary.currentWrong} missed question${progressSummary.currentWrong===1?'':'s'}` : 'No missed questions yet'; }
   const byBank={}; QUESTIONS.forEach(q => byBank[q.bank]=(byBank[q.bank]||0)+1); const max=Math.max(1,...Object.values(byBank));
   $('#coverageBadge').textContent = `${banks.length} banks`;
   $('#coverageList').innerHTML = Object.entries(byBank).sort((a,b)=>b[1]-a[1]).slice(0,12).map(([k,v]) => `<div class="coverage-row"><span>${esc(k)}</span><div class="bar"><i style="width:${Math.round(v/max*100)}%"></i></div><span>${v}</span></div>`).join('');
@@ -174,14 +197,34 @@ function makeSessionQuestion(q){
   const finalOptions = $('#shuffleOptions').checked ? shuffle(options) : options;
   return {...q, options: finalOptions, correctOptionIndex: finalOptions.findIndex(o=>o.correct), selectedIndex:null, isCorrect:null};
 }
+function startMistakeSession(){
+  const ids = getWrongQuestionIds('current');
+  let pool = QUESTIONS.filter(q => ids.has(q.id));
+  if(!pool.length){
+    const historical = getWrongQuestionIds('history');
+    pool = QUESTIONS.filter(q => historical.has(q.id));
+  }
+  if(!pool.length){ alert('No missed questions yet. Complete a session first.'); return; }
+  clearInterval(state.timer);
+  state.overridePool = pool;
+  state.mode = 'learn';
+  $$('.mode-card').forEach(c => c.classList.toggle('selected', c.dataset.mode === 'learn'));
+  $('#questionCount').value = Math.min(20, pool.length);
+  $('#examMinutes').value = 12;
+  startSession();
+}
 function startSession(){
   if(state.mode === 'concept'){ renderConcepts(true); return; }
   clearInterval(state.timer);
-  const pool = getPool();
-  if(!pool.length){ alert(state.banks.size===0 && state.mode!=='skill' ? 'Select at least one question bank first.' : 'No questions match the selected filters. Add more banks, topics, or difficulties.'); showView('setup'); return; }
+  const overrideActive = Array.isArray(state.overridePool) && state.overridePool.length > 0;
+  const pool = overrideActive ? [...state.overridePool] : getPool();
+  state.overridePool = null;
+  if(!pool.length){ alert(state.banks.size===0 && state.mode!=='skill' && !overrideActive ? 'Select at least one question bank first.' : 'No questions match the selected filters. Add more banks, topics, or difficulties.'); showView('setup'); return; }
   let requested = Math.max(1, parseInt($('#questionCount').value || '20', 10));
   let selected;
-  if(state.mode === 'skill'){
+  if(overrideActive){
+    selected = sample(pool, requested);
+  } else if(state.mode === 'skill'){
     requested = 20; $('#questionCount').value = 20; $('#examMinutes').value = 12;
     const m=sample(pool.filter(q=>q.difficulty==='Medium'),6), h=sample(pool.filter(q=>q.difficulty==='Hard'),8), v=sample(pool.filter(q=>q.difficulty==='Very Hard'),6);
     selected = shuffle([...m,...h,...v]);
@@ -193,8 +236,8 @@ function startSession(){
   const minutes=Math.max(1, parseInt($('#examMinutes').value || '12', 10));
   state.endAt = (state.mode==='exam' || state.mode==='skill') ? Date.now() + minutes*60000 : null;
   if(state.endAt) state.timer=setInterval(tick, 250);
-  $('#sessionModeLabel').textContent = state.mode==='learn' ? 'Learning Mode' : state.mode==='exam' ? 'Exam Mode' : 'Skill IQ-style Sprint';
-  $('#sessionTitle').textContent = state.mode==='skill' ? 'Mixed timed practice' : 'Question Session';
+  $('#sessionModeLabel').textContent = overrideActive ? 'Missed Questions Review' : state.mode==='learn' ? 'Learning Mode' : state.mode==='exam' ? 'Exam Mode' : 'Skill IQ-style Sprint';
+  $('#sessionTitle').textContent = overrideActive ? 'Review your missed questions' : state.mode==='skill' ? 'Mixed timed practice' : 'Question Session';
   showView('session');
   renderQuestion();
   tick();
@@ -212,6 +255,9 @@ function renderQuestion(){
   $('#progressFill').style.width = `${Math.round((state.idx/state.session.length)*100)}%`;
   $('#liveScore').textContent = `${pct(state.answers.filter(a=>a.correct).length, state.answers.length)}%`;
   $('#qBank').textContent=q.bank; $('#qTopic').textContent=q.topic; $('#qDifficulty').textContent=q.difficulty;
+  const rec = getQuestionProgress(q.id);
+  const historyBadge = $('#qHistoryBadge');
+  if(historyBadge){ historyBadge.textContent = rec.wrongCount ? `Previously missed ${rec.wrongCount}x${rec.lastCorrect === false ? ' · needs review' : ''}` : ''; historyBadge.classList.toggle('needs-review', !!rec.wrongCount); }
   $('#questionText').textContent = q.question;
   $('#choices').innerHTML = q.options.map((o,i)=>`<button type="button" class="choice" data-i="${i}"><span class="letter">${String.fromCharCode(65+i)}</span><span>${esc(o.text)}</span></button>`).join('');
   $$('#choices .choice').forEach(btn => btn.addEventListener('click', () => selectChoice(Number(btn.dataset.i))));
@@ -238,28 +284,77 @@ function finishSession(){
   clearInterval(state.timer); if(!state.session.length){ showView('setup'); return; }
   const total=state.session.length, answered=state.answers.length, correct=state.answers.filter(a=>a.correct).length, score=pct(correct,total); saveBest(score);
   $('#resultsPanel').style.setProperty('--score', `${score}%`);
-  $('#resultsPanel').innerHTML = `<div class="result-hero"><div class="big-percent">${score}%</div><div><p class="eyebrow">Session complete</p><h1>${correct}/${total} correct</h1><p class="muted">Answered ${answered}/${total}. Use Learning Mode to review weak areas.</p><div class="actions"><button class="primary" id="retryBtn" type="button">Retry random set</button><button class="secondary" id="backSetupBtn" type="button">Back to setup</button></div></div></div>
+  $('#resultsPanel').innerHTML = `<div class="result-hero"><div class="big-percent">${score}%</div><div><p class="eyebrow">Session complete</p><h1>${correct}/${total} correct</h1><p class="muted">Answered ${answered}/${total}. Use Learning Mode to review weak areas.</p><div class="actions"><button class="primary" id="retryBtn" type="button">Retry random set</button><button class="secondary" id="backSetupBtn" type="button">Back to setup</button><button class="secondary" id="reviewMissedBtn" type="button">Practice missed</button></div></div></div>
   <h2>Breakdown by difficulty</h2><div class="breakdown">${breakdownCards('difficulty')}</div>
   <h2>Breakdown by topic</h2><div class="breakdown">${breakdownCards('topic',12)}</div>
   <h2>Review</h2><div class="review-list">${reviewList()}</div>`;
-  $('#retryBtn').addEventListener('click', startSession); $('#backSetupBtn').addEventListener('click', () => showView('setup'));
+  $('#retryBtn').addEventListener('click', startSession); $('#backSetupBtn').addEventListener('click', () => showView('setup')); $('#reviewMissedBtn').addEventListener('click', startMistakeSession);
   showView('results');
 }
 function breakdownCards(field, limit=99){ const obj={}; state.session.forEach(q=>{ const k=q[field]; obj[k]=obj[k]||{c:0,t:0}; obj[k].t++; }); state.answers.forEach(a=>{ if(a.correct){ const k=a.question[field]; if(obj[k]) obj[k].c++; }}); return Object.entries(obj).sort((a,b)=>b[1].t-a[1].t).slice(0,limit).map(([k,v])=>`<div class="break-card"><b>${esc(k)}</b><p>${v.c}/${v.t} correct · ${pct(v.c,v.t)}%</p></div>`).join(''); }
 function reviewList(){ return state.session.map((q,i)=>{ const a=state.answers.find(x=>x.id===q.id); const cls=!a?'skipped':a.correct?'correct':'wrong'; const sel=a?q.options[a.selected].text:'Not answered'; return `<div class="review-item ${cls}"><p><b>${i+1}. ${esc(q.question)}</b></p><p>${a ? (a.correct?'Correct':'Wrong') : 'Skipped'} · Your answer: ${esc(sel)}</p><p><b>Correct:</b> ${esc(q.options[q.correctOptionIndex].text)}</p><p>${esc(q.explanation)}</p></div>`; }).join(''); }
 function loadProgress(){ try { return JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{"answered":{},"best":null}'); } catch(e){ return {answered:{}, best:null}; } }
 function saveProgress(p){ localStorage.setItem(PROGRESS_KEY, JSON.stringify(p)); }
-function markAnswered(q, correct){ const p=loadProgress(); p.answered[q.id]={correct,t:Date.now(),topic:q.topic,bank:q.bank}; saveProgress(p); }
-function saveBest(score){ const p=loadProgress(); p.best = p.best==null ? score : Math.max(p.best, score); saveProgress(p); }
+function normalizeProgressRecord(rec){
+  if(!rec) return {attempts:0, correctAttempts:0, wrongCount:0, wrongAttempts:0, lastCorrect:null};
+  const attempts = Number(rec.attempts || 0) || (typeof rec.correct === 'boolean' ? 1 : 0);
+  const wrongAttempts = Number(rec.wrongAttempts ?? rec.wrongCount ?? 0) || (rec.correct === false ? 1 : 0);
+  const correctAttempts = Number(rec.correctAttempts || 0) || (rec.correct === true ? 1 : 0);
+  const lastCorrect = typeof rec.lastCorrect === 'boolean' ? rec.lastCorrect : (typeof rec.correct === 'boolean' ? rec.correct : null);
+  return {...rec, attempts, correctAttempts, wrongAttempts, wrongCount:wrongAttempts, lastCorrect};
+}
+function getQuestionProgress(id){ const p=loadProgress(); return normalizeProgressRecord(p.answered?.[id]); }
+function getWrongQuestionIds(mode='current'){
+  const p=loadProgress(); const ids=new Set();
+  Object.entries(p.answered || {}).forEach(([id, raw]) => {
+    const rec = normalizeProgressRecord(raw);
+    if(mode === 'history' ? rec.wrongCount > 0 : rec.lastCorrect === false) ids.add(id);
+  });
+  return ids;
+}
+function getProgressSummary(){
+  const p=loadProgress(); let currentWrong=0, historicalWrong=0, answered=0;
+  Object.values(p.answered || {}).forEach(raw => { const rec=normalizeProgressRecord(raw); if(rec.attempts) answered++; if(rec.lastCorrect===false) currentWrong++; if(rec.wrongCount>0) historicalWrong++; });
+  return {answered, currentWrong, historicalWrong, best:p.best};
+}
+function markAnswered(q, correct){
+  const p=loadProgress(); const prev=normalizeProgressRecord(p.answered?.[q.id]);
+  p.answered = p.answered || {};
+  p.answered[q.id] = {
+    attempts: prev.attempts + 1,
+    correctAttempts: prev.correctAttempts + (correct ? 1 : 0),
+    wrongAttempts: prev.wrongAttempts + (correct ? 0 : 1),
+    wrongCount: prev.wrongCount + (correct ? 0 : 1),
+    lastCorrect: !!correct,
+    correct: !!correct,
+    lastSeen: Date.now(),
+    topic: q.topic,
+    bank: q.bank,
+    difficulty: q.difficulty
+  };
+  saveProgress(p);
+}
+function saveBest(score){ const p=loadProgress(); p.best = p.best==null ? score : Math.max(p.best, score); saveProgress(p); renderDashboard(); }
 function renderConcepts(activate=false){
   const cat = $('#conceptCategory').value || 'All'; const cards = CONCEPTS.filter(c => cat==='All' || c.category===cat);
   $('#conceptPanel').innerHTML = `<div class="concept-head card"><div><p class="eyebrow">Concept Mode</p><h1>${esc(cat)} Knowledge Cards</h1><p class="muted">Study cards before practice. Each card focuses on common Skill IQ traps.</p></div><button class="primary" id="conceptPracticeBtn" type="button">Practice questions</button></div><div class="concept-grid">${cards.map(c=>`<article class="concept-card"><span class="pill">${esc(c.category)}</span><h3>${esc(c.title)}</h3><p>${esc(c.body)}</p><ul>${(c.keyPoints||[]).map(k=>`<li>${esc(k)}</li>`).join('')}</ul><div class="pitfall"><b>Test trap:</b> ${esc(c.pitfall||'')}</div></article>`).join('')}</div>`;
   $('#conceptPracticeBtn').addEventListener('click', () => { setMode('learn'); showView('setup'); });
   if(activate) showView('concepts');
 }
-function renderLibrary(){ const byBank={}; QUESTIONS.forEach(q => { byBank[q.bank]=byBank[q.bank]||{t:0, topics:new Set(), diffs:new Set()}; byBank[q.bank].t++; byBank[q.bank].topics.add(q.topic); byBank[q.bank].diffs.add(q.difficulty); }); $('#libraryGrid').innerHTML = Object.entries(byBank).sort((a,b)=>a[0].localeCompare(b[0])).map(([bank,v])=>`<article class="library-card"><b>${esc(bank)}</b><span>${v.t} questions · ${v.topics.size} topics · ${[...v.diffs].join(', ')}</span></article>`).join(''); }
+function renderLibrary(){
+  const wrongIds = getWrongQuestionIds('current');
+  const histWrongIds = getWrongQuestionIds('history');
+  const byBank={};
+  QUESTIONS.forEach(q => {
+    byBank[q.bank]=byBank[q.bank]||{t:0, topics:new Set(), diffs:new Set(), currentWrong:0, historicalWrong:0};
+    byBank[q.bank].t++; byBank[q.bank].topics.add(q.topic); byBank[q.bank].diffs.add(q.difficulty);
+    if(wrongIds.has(q.id)) byBank[q.bank].currentWrong++;
+    if(histWrongIds.has(q.id)) byBank[q.bank].historicalWrong++;
+  });
+  $('#libraryGrid').innerHTML = Object.entries(byBank).sort((a,b)=>a[0].localeCompare(b[0])).map(([bank,v])=>`<article class="library-card ${v.currentWrong ? 'has-mistakes' : ''}"><b>${esc(bank)}</b><span>${v.t} questions · ${v.topics.size} topics · ${[...v.diffs].join(', ')}</span>${v.currentWrong ? `<em>${v.currentWrong} currently missed</em>` : v.historicalWrong ? `<em class="soft">${v.historicalWrong} previously missed</em>` : ''}</article>`).join('');
+}
 function renderImportStats(){
-  $('#customCountBadge').textContent = `${CUSTOM.length} custom · ${AUTO_REFERENCE.length} auto`;
+  $('#customCountBadge').textContent = `${CUSTOM.length} custom · ${AUTO_REFERENCE.length} reference`;
   const banks=uniq(CUSTOM.map(q=>q.bank)), topics=uniq(CUSTOM.map(q=>q.topic));
   $('#customSummary').innerHTML = CUSTOM.length ? `<b>Saved custom library</b><p>${CUSTOM.length} questions · ${banks.length} banks · ${topics.length} topics</p><p><b>Banks:</b> ${esc(banks.slice(0,5).join(', '))}${banks.length>5?'...':''}</p>` : 'No saved imported questions yet.';
   renderParsedPreview();
@@ -276,16 +371,49 @@ function updateAutoReferenceStatus(){
   if(!document.getElementById(AUTO_REF_STATUS_ID)) return;
   const banks = uniq(AUTO_REFERENCE.map(q=>q.bank));
   if(AUTO_REFERENCE.length){
-    setAutoReferenceStatus(`<b>${AUTO_REFERENCE.length}</b> auto-loaded questions from reference PDFs. <br><small>Banks: ${esc(banks.slice(0,6).join(', '))}${banks.length>6?'...':''}</small>`);
+    const cachedAt = AUTO_REFERENCE_CACHE?.fetchedAt ? new Date(AUTO_REFERENCE_CACHE.fetchedAt).toLocaleString() : 'this session';
+    setAutoReferenceStatus(`<b>${AUTO_REFERENCE.length}</b> reference PDF questions are integrated in this browser. <br><small>Banks: ${esc(banks.slice(0,6).join(', '))}${banks.length>6?'...':''}</small><br><small>Cached: ${esc(cachedAt)}. New PDFs will be checked in the background.</small>`);
   } else {
-    setAutoReferenceStatus('No reference PDFs auto-loaded yet. On GitHub Pages, PDFs in <code>reference_pdfs/</code> are discovered automatically. For local/custom-domain use, update <code>reference_pdfs/manifest.json</code>.');
+    setAutoReferenceStatus('No reference PDFs integrated yet. On GitHub Pages, PDFs in <code>reference_pdfs/</code> are discovered automatically. For best reliability, also list them in <code>reference_pdfs/manifest.json</code>.');
   }
 }
-async function autoLoadReferencePdfs(){
-  if(!window.pdfjsLib){ updateAutoReferenceStatus(); return; }
-  setAutoReferenceStatus('Checking reference PDFs for import-ready question banks...');
-  const sources = await discoverReferencePdfs();
+function sourceSignature(sources){
+  return sources.map(s => `${s.file || s.name || s.url}|${s.sha || ''}|${s.version || ''}|${s.size || ''}`).sort().join('||');
+}
+async function autoLoadReferencePdfs(opts={}){
+  const force = !!opts.force;
+  const cached = loadAutoReferenceCache();
+  if(cached.questions.length && !force){
+    AUTO_REFERENCE_CACHE = cached;
+    AUTO_REFERENCE = cached.questions;
+    QUESTIONS = mergeQuestions(BASE_QUESTIONS, CUSTOM, AUTO_REFERENCE);
+    renderAll();
+    setAutoReferenceStatus(`<b>${AUTO_REFERENCE.length}</b> cached reference PDF questions loaded instantly. Checking for new or changed PDFs in the background...`);
+  } else if(force){
+    setAutoReferenceStatus('Refreshing reference PDFs. This may take a moment for large PDFs...');
+  } else {
+    setAutoReferenceStatus('Checking reference PDFs for import-ready question banks...');
+  }
+  const sources = await discoverReferencePdfs().catch(err => {
+    console.warn('PDF discovery failed', err);
+    if(cached.questions.length){ setAutoReferenceStatus(`<b>${cached.questions.length}</b> cached reference PDF questions loaded. Live PDF discovery failed, so cached questions remain available.`); }
+    return [];
+  });
   if(!sources.length){ updateAutoReferenceStatus(); return; }
+  const signature = sourceSignature(sources);
+  if(!force && cached.questions.length && cached.signature === signature){
+    AUTO_REFERENCE_CACHE = cached;
+    AUTO_REFERENCE = cached.questions;
+    QUESTIONS = mergeQuestions(BASE_QUESTIONS, CUSTOM, AUTO_REFERENCE);
+    renderAll();
+    setAutoReferenceStatus(`<b>${AUTO_REFERENCE.length}</b> reference PDF questions loaded from cache. No PDF changes detected.`);
+    return;
+  }
+  if(!window.pdfjsLib){
+    if(cached.questions.length){ updateAutoReferenceStatus(); return; }
+    setAutoReferenceStatus('PDF.js is unavailable, so reference PDFs cannot be parsed in this browser. Use JSON import or try again online.');
+    return;
+  }
   const parsed = [];
   const report = [];
   for(const src of sources){
@@ -305,14 +433,26 @@ async function autoLoadReferencePdfs(){
     }
   }
   AUTO_REFERENCE = parsed;
+  AUTO_REFERENCE_CACHE = {signature, questions: parsed, sources, report, fetchedAt: new Date().toISOString()};
+  saveAutoReferenceCache(AUTO_REFERENCE_CACHE);
   QUESTIONS = mergeQuestions(BASE_QUESTIONS, CUSTOM, AUTO_REFERENCE);
   renderAll();
-  setAutoReferenceStatus(report.length ? `<b>${AUTO_REFERENCE.length}</b> auto-loaded questions from reference PDFs.<br><small>${report.join('<br>')}</small>` : 'No reference PDFs found.');
+  setAutoReferenceStatus(report.length ? `<b>${AUTO_REFERENCE.length}</b> reference PDF questions parsed once and cached locally.<br><small>${report.join('<br>')}</small>` : 'No reference PDFs found.');
 }
 async function discoverReferencePdfs(){
-  const viaGithub = await discoverReferencePdfsViaGithub().catch(()=>[]);
-  if(viaGithub.length) return viaGithub;
-  return await discoverReferencePdfsViaManifest().catch(()=>[]);
+  const [viaManifest, viaGithub] = await Promise.allSettled([
+    discoverReferencePdfsViaManifest(),
+    discoverReferencePdfsViaGithub()
+  ]);
+  const all = [];
+  if(viaManifest.status === 'fulfilled') all.push(...viaManifest.value);
+  if(viaGithub.status === 'fulfilled') all.push(...viaGithub.value);
+  const seen = new Set();
+  return all.filter(src => {
+    const key = norm(src.name || src.file || src.url);
+    if(!key || seen.has(key)) return false;
+    seen.add(key); return true;
+  });
 }
 async function discoverReferencePdfsViaManifest(){
   const res = await fetch(`${AUTO_REF_PATH}/manifest.json?ts=${Date.now()}`, {cache:'no-store'});
@@ -331,15 +471,14 @@ async function discoverReferencePdfsViaGithub(){
   const host = location.hostname;
   if(!host.endsWith('.github.io')) return [];
   const owner = host.replace('.github.io','');
-  let repo = location.pathname.split('/').filter(Boolean)[0];
-  if(!repo) repo = `${owner}.github.io`;
+  const repo = location.pathname.split('/').filter(Boolean)[0];
   if(!owner || !repo) return [];
   const api = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${AUTO_REF_PATH}`;
   const res = await fetch(api, {cache:'no-store'});
   if(!res.ok) return [];
   const items = await res.json();
   if(!Array.isArray(items)) return [];
-  return items.filter(x => x.type === 'file' && /\.pdf$/i.test(x.name) && x.download_url).map(x => ({name:x.name, file:x.name, url:x.download_url, sha:x.sha, bank:cleanBankName(x.name), topic:'Reference PDF Import', difficulty:'Hard'}));
+  return items.filter(x => x.type === 'file' && /\.pdf$/i.test(x.name) && x.download_url).map(x => ({name:x.name, file:x.name, url:x.download_url, sha:x.sha, size:x.size, bank:cleanBankName(x.name), topic:'Reference PDF Import', difficulty:'Hard'}));
 }
 async function extractPdfTextFromUrl(url){
   if(!window.pdfjsLib) throw new Error('PDF.js is unavailable.');
